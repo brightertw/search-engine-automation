@@ -1,8 +1,13 @@
-name: notebook
+name: search-engine-automation
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
-  - jupyterlab
+  - python=3.11
+  - requests
   - matplotlib
   - numpy
+  - pip
+  - pip:
+    - google-api-python-client
+    - google-auth-httplib2
+    - google-auth-oauthlib

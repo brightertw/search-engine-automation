@@ -18,7 +18,7 @@ include conda-env.mk
 conda-env: conda-env-reusable
 
 PREFERRED_INTERACTIVE_SHELL ?= bash
-PS1_NAME ?= 'notebook'
+PS1_NAME ?= 'search'
 MAKE_SHELL_PS1 ?= '$(PS1_NAME) $$ '
 .PHONY: shell
 shell:

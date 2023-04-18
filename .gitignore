@@ -1,3 +1,8 @@
 conda-env/
 bin/micromamba
 .ipynb_checkpoints/
+
+# Secrets
+API-KEY
+CX
+google-workspace-credentials.json

@@ -1,0 +1,206 @@
+#!/usr/bin/env python
+
+import sys
+import os
+import requests
+import time
+import re
+from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+START_DATE = '20220901'
+END_DATE = '20220931'
+GOOGLE_WORKSPACE_DOMAIN = 'brighter.tw'
+
+def google_search_credentials_load():
+    global CX
+    global GOOGLE_SEARCH_API_KEY
+    with open('CX') as f:
+        CX = f.read().strip()
+    with open('API-KEY') as f:
+        GOOGLE_SEARCH_API_KEY = f.read().strip()
+
+def search_bigeyes_articles(api_key, start_date, end_date):
+    query = 'Big Eyes cryptocurrency OR link:bigeyes.space'
+    url = 'https://www.googleapis.com/customsearch/v1'
+    cx = CX
+
+    all_items = []
+    start_index = 1
+
+    while True:
+        params = {
+            'key': api_key,
+            'cx': cx,
+            'q': query,
+            'sort': f'date:r:{start_date}:{end_date}',
+            'start': start_index
+        }
+
+        response = requests.get(url, params=params)
+        data = response.json()
+
+        if 'items' in data:
+            for item in data['items']:
+                date_string = extract_date_from_snippet(item['snippet'])
+                item['date'] = date_string
+                all_items.append(item)
+
+            start_index += len(data['items'])
+
+            if 'queries' in data and 'nextPage' in data['queries']:
+                time.sleep(2)
+            else:
+                break
+        else:
+            break
+
+    return all_items
+
+def extract_date_from_snippet(snippet):
+    #date_pattern = r'\b(\d{1,2}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s\d{4})\b'
+    'Mar 3, 2023'
+    date_pattern =  r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s*\d{1,2},\s*\d{4}\b'
+    match = re.search(date_pattern, snippet)
+
+    if match:
+        date_string = match.group(0)
+        return parse_american_date_string(date_string)
+    else:
+        return None
+
+def parse_american_date_string(date_string):
+    try:
+        parsed_date = datetime.strptime(date_string, "%b %d, %Y")
+        return parsed_date
+    except ValueError:
+        print(f"Invalid date string: {date_string}")
+        return None
+
+
+main_function_map = {}
+
+def main_function(func):
+    global main_function_map
+    main_function_map[func.__name__.replace('_','-')] = func
+    return func
+
+@main_function
+def big_eyes_search(args):
+    google_search_credentials_load()
+    api_key = GOOGLE_SEARCH_API_KEY
+    start_date = START_DATE
+    end_date = END_DATE
+
+    articles = search_bigeyes_articles(api_key, start_date, end_date)
+
+    for article in articles:
+        print(f"Title: {article['title']}")
+        if article['date'] is not None:
+            print(f"Date: {article['date']}")
+        if article['snippet'] is not None:
+            print(f"Snippet: {article['snippet']}")
+        print(f"Link: {article['link']}")
+        print('------------------------------------')
+
+class SheetService:
+    def __init__(self, credentials_file_name):
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_file_name, scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive'])
+
+        service = build('sheets', 'v4', credentials=credentials)
+        self.credentials = credentials
+        self.service = service
+
+    def create_spreadsheet(self, spreadsheet_name, sheet_name):
+        spreadsheet = {
+            'properties': {
+                'title': spreadsheet_name
+            },
+            'sheets': [
+                {
+                    'properties': {
+                        'title': sheet_name
+                    }
+                }
+            ]
+        }
+
+        spreadsheet = self.service.spreadsheets().create(body=spreadsheet, fields='spreadsheetId,spreadsheetUrl').execute()
+        return spreadsheet
+
+    def append_data_to_sheet(self, spreadsheet_id, sheet_name, data):
+        values = [['Date', 'Title', 'Link']]  # Header row
+        for article in data:
+            date = article['date']
+            if date is not None:
+                date_val = date.isoformat()
+            else:
+                date_val = ''
+            values.append([date_val, article['title'], article['link']])
+
+        body = {
+            'values': values
+        }
+        range_name = f'{sheet_name}!A1'
+
+        result = self.service.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id, range=range_name, valueInputOption='RAW', body=body).execute()
+
+    def share_spreadsheet_with_organization(self, spreadsheet_id, google_workspace_domain):
+        try:
+            drive_service = build('drive', 'v3', credentials=self.credentials)
+
+            domain_permission = {
+                'type': 'domain',
+                'role': 'writer',
+                'domain': google_workspace_domain,
+            }
+
+            drive_service.permissions().create(
+                fileId=spreadsheet_id,
+                body=domain_permission,
+                fields='id'
+            ).execute()
+            print(f'Successfully shared the spreadsheet with the organization.')
+        except HttpError as error:
+            print(f'An error occurred while sharing the spreadsheet: {error}')
+            return None
+
+@main_function
+def big_eyes_to_sheet(args):
+    google_search_credentials_load()
+    api_key = GOOGLE_SEARCH_API_KEY
+    start_date = START_DATE
+    end_date = END_DATE
+
+    articles = search_bigeyes_articles(api_key, start_date, end_date)
+
+    spreadsheet_name = 'Big Eyes Articles'
+    sheet_name = 'Results'
+
+    sheet_service = SheetService('google-workspace-credentials.json')
+    spreadsheet = sheet_service.create_spreadsheet(spreadsheet_name, sheet_name)
+    spreadsheet_id = spreadsheet.get('spreadsheetId')
+    spreadsheet_url = spreadsheet.get('spreadsheetUrl')
+    sheet_service.append_data_to_sheet(spreadsheet_id, sheet_name, articles)
+    sheet_service.share_spreadsheet_with_organization(spreadsheet_id, GOOGLE_WORKSPACE_DOMAIN)
+    print(f'Successfully created Google Sheets spreadsheet: {spreadsheet_name}')
+    print(f'Spreadsheet ID: {spreadsheet_id}')
+    print(f'Spreadsheet URL: {spreadsheet_url}')
+
+def main_function_dispatch(name, args):
+    try:
+        f = main_function_map[name]
+    except KeyError:
+        sys.stderr.write('%s is not a valid command name\n' % (name,))
+        sys.exit(2)
+    f(args)
+
+def program_name():
+    return os.path.basename(sys.argv[0])
+
+if __name__ == '__main__':
+    main_function_dispatch(program_name(), sys.argv[1:])
