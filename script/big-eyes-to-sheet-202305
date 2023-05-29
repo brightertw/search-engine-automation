@@ -1,0 +1,3 @@
+#!/bin/bash
+
+./bin/big-eyes-to-sheet 20230501 20230531

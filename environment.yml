@@ -7,6 +7,7 @@ dependencies:
   - matplotlib
   - numpy
   - pip
+  - ipython
   - pip:
     - google-api-python-client
     - google-auth-httplib2

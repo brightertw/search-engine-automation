@@ -6,12 +6,13 @@ import requests
 import time
 import re
 from datetime import datetime
+import argparse
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-START_DATE = '20220901'
-END_DATE = '20220931'
+START_DATE = '20230501'
+END_DATE = '20220531'
 GOOGLE_WORKSPACE_DOMAIN = 'brighter.tw'
 
 def google_search_credentials_load():
@@ -171,10 +172,15 @@ class SheetService:
 
 @main_function
 def big_eyes_to_sheet(args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('start-date', type=str)
+    parser.add_argument('end-date', type=str)
+    options = parser.parse_args(args)
+
     google_search_credentials_load()
     api_key = GOOGLE_SEARCH_API_KEY
-    start_date = START_DATE
-    end_date = END_DATE
+    start_date = getattr(options, 'start-date')
+    end_date = getattr(options, 'end-date')
 
     articles = search_bigeyes_articles(api_key, start_date, end_date)
 
