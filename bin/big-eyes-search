@@ -10,6 +10,7 @@ import argparse
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from duckduckgo_search import DDGS
 
 START_DATE = '20230501'
 END_DATE = '20220531'
@@ -80,7 +81,6 @@ def parse_american_date_string(date_string):
         print(f"Invalid date string: {date_string}")
         return None
 
-
 main_function_map = {}
 
 def main_function(func):
@@ -105,6 +105,32 @@ def big_eyes_search(args):
             print(f"Snippet: {article['snippet']}")
         print(f"Link: {article['link']}")
         print('------------------------------------')
+
+def search_bigeyes_articles_ddg(timelimit):
+    # timelimit='m'
+    with DDGS(proxies="socks5://localhost:9150", timeout=20) as ddgs:
+        result = list(ddgs.news('big eyes coin', region='wt-wt', safesearch='Off', timelimit=timelimit))
+
+    result.sort(key=lambda x: datetime.fromisoformat(x['date']))
+    return result
+
+@main_function
+def big_eyes_search_ddg(args):
+    articles = search_bigeyes_articles_ddg(timelimit='m')
+    for article in articles:
+        print(f"Title: {article['title']}")
+        if article['date'] is not None:
+            print(f"Date: {article['date']}")
+        if article['snippet'] is not None:
+            print(f"Snippet: {article['snippet']}")
+        print(f"Link: {article['link']}")
+        print('------------------------------------')
+
+def sheet_image_formula(image_url):
+    return '' if image_url is None else f'=IMAGE("{image_url}")'
+
+def sheet_hyperlink_formula(text, url):
+    return f'=HYPERLINK("{url}", "{text}")'
 
 class SheetService:
     def __init__(self, credentials_file_name):
@@ -132,15 +158,22 @@ class SheetService:
         spreadsheet = self.service.spreadsheets().create(body=spreadsheet, fields='spreadsheetId,spreadsheetUrl').execute()
         return spreadsheet
 
-    def append_data_to_sheet(self, spreadsheet_id, sheet_name, data):
-        values = [['Date', 'Title', 'Link']]  # Header row
+    def append_data_to_sheet(self, spreadsheet_id, sheet_name, sheet_id, data):
+        values = [['Date', 'Source', 'Title', 'Body']]  # Header row
         for article in data:
             date = article['date']
-            if date is not None:
-                date_val = date.isoformat()
-            else:
+            if date is None:
                 date_val = ''
-            values.append([date_val, article['title'], article['link']])
+            else:
+                date_val = date
+            values.append([date_val, 
+                           article['source'],
+                           sheet_hyperlink_formula(article['title'], article['url']),
+                           article['body'],
+             ])
+
+        n_rows = len(values)
+        n_columns = len(values[0])
 
         body = {
             'values': values
@@ -148,7 +181,124 @@ class SheetService:
         range_name = f'{sheet_name}!A1'
 
         result = self.service.spreadsheets().values().update(
-            spreadsheetId=spreadsheet_id, range=range_name, valueInputOption='RAW', body=body).execute()
+            spreadsheetId=spreadsheet_id, range=range_name, valueInputOption='USER_ENTERED', body=body).execute()
+
+        # Format first row as Bold and freeze 1 row
+        bold_format_response = self.format_bold_range(spreadsheet_id, sheet_id=sheet_id, start_row=0, end_row=1, start_column=0, end_column=n_columns)
+        print('bold_format_response:', bold_format_response)
+        freeze_rows_response = self.format_freeze_rows(spreadsheet_id, sheet_id=sheet_id, n_rows=1)
+        print('freeze_rows:', freeze_rows_response)
+        format_date_column_response = self.format_date_column(spreadsheet_id, sheet_id, start_row=0, end_row=n_rows, column=0)
+        print('format_date_column_response:', format_date_column_response)
+        resize_columns_response = self.format_auto_resize_columns(spreadsheet_id, sheet_id, start_column=0, end_column=n_columns)
+        print('resize_columns:', resize_columns_response)
+        return result
+
+    def format_bold_range(self, spreadsheet_id, sheet_id, start_row, end_row, start_column, end_column):
+        # {start,end}_{row,column} are 0-indexed
+
+        # spreadsheets().batchUpdate() method can be used to modify the format of cells.
+        requests = [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start_row,
+                    "endRowIndex": end_row,
+                    "startColumnIndex": start_column,
+                    "endColumnIndex": end_column,
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "textFormat": {
+                            "bold": True
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.textFormat.bold"
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+        response = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body).execute()
+        return response
+
+    def format_freeze_rows(self, spreadsheet_id, sheet_id, n_rows):
+        requests = [{
+            'updateSheetProperties': {
+                'properties': {
+                    'sheetId': sheet_id,
+                    'gridProperties': {
+                        'frozenRowCount': n_rows,
+                    }
+                },
+                'fields': 'gridProperties.frozenRowCount'
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+
+        response = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body).execute()
+        return response
+
+    def format_auto_resize_columns(self, spreadsheet_id, sheet_id, start_column, end_column):
+        requests = [{
+            'autoResizeDimensions': {
+                'dimensions': {
+                    'sheetId': sheet_id,
+                    'dimension': 'COLUMNS',
+                    'startIndex': start_column,
+                    'endIndex': end_column,
+                }
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+
+        response = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body).execute()
+        return response
+
+    def format_date_column(self, spreadsheet_id, sheet_id, start_row, end_row, column):
+        requests = [{
+            "repeatCell": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "startRowIndex": start_row,
+                    "endRowIndex": end_row,
+                    "startColumnIndex": column,
+                    "endColumnIndex": column+1
+                },
+                "cell": {
+                    "userEnteredFormat": {
+                        "numberFormat": {
+                            "type": "DATE_TIME",
+                            "pattern": "yyyy-MM-dd HH:mm:ss"
+                        }
+                    }
+                },
+                "fields": "userEnteredFormat.numberFormat"
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+
+        response = self.service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body=body).execute()
+        return response
 
     def share_spreadsheet_with_organization(self, spreadsheet_id, google_workspace_domain):
         try:
@@ -189,9 +339,34 @@ def big_eyes_to_sheet(args):
 
     sheet_service = SheetService('google-workspace-credentials.json')
     spreadsheet = sheet_service.create_spreadsheet(spreadsheet_name, sheet_name)
+    sheets = spreadsheet['sheets']
+    sheet_ids = [ s['properties']['sheetId'] for x in sheets ]
+    sheet_id = sheet_ids[0]
     spreadsheet_id = spreadsheet.get('spreadsheetId')
     spreadsheet_url = spreadsheet.get('spreadsheetUrl')
-    sheet_service.append_data_to_sheet(spreadsheet_id, sheet_name, articles)
+    sheet_service.append_data_to_sheet(spreadsheet_id, sheet_name, sheet_id, articles)
+    sheet_service.share_spreadsheet_with_organization(spreadsheet_id, GOOGLE_WORKSPACE_DOMAIN)
+    print(f'Successfully created Google Sheets spreadsheet: {spreadsheet_name}')
+    print(f'Spreadsheet ID: {spreadsheet_id}')
+    print(f'Spreadsheet URL: {spreadsheet_url}')
+
+@main_function
+def big_eyes_to_sheet_ddg(args):
+    articles = search_bigeyes_articles_ddg(timelimit='m')
+    # articles = {}
+    spreadsheet_name = 'Big Eyes Articles'
+    sheet_name = 'Results'
+
+    sheet_service = SheetService('google-workspace-credentials.json')
+    spreadsheet = sheet_service.create_spreadsheet(spreadsheet_name, sheet_name)
+    spreadsheet_id = spreadsheet.get('spreadsheetId')
+    spreadsheet_url = spreadsheet.get('spreadsheetUrl')
+    spreadsheet_data = sheet_service.service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    # print('spreadsheet:', dir(spreadsheet))
+    sheets = spreadsheet_data['sheets']
+    sheet_ids = [ s['properties']['sheetId'] for s in sheets ]
+    sheet_id = sheet_ids[0]
+    sheet_service.append_data_to_sheet(spreadsheet_id, sheet_name, sheet_id, articles)
     sheet_service.share_spreadsheet_with_organization(spreadsheet_id, GOOGLE_WORKSPACE_DOMAIN)
     print(f'Successfully created Google Sheets spreadsheet: {spreadsheet_name}')
     print(f'Spreadsheet ID: {spreadsheet_id}')

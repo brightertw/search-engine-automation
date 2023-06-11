@@ -12,3 +12,4 @@ dependencies:
     - google-api-python-client
     - google-auth-httplib2
     - google-auth-oauthlib
+    - duckduckgo-search==3.8.3
